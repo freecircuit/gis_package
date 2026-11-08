@@ -1,0 +1,29 @@
+
+[build-system]
+requires = ["setuptools>=61.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "freecircuit"
+version = "0.1.0"
+description = "A collection of GIS Python functions for ESRI data"
+readme = "README.md"
+authors = [
+    { name = "freecircuit", email = "freecircuit@protonmail.com" }
+]
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "pandas>=2.0.0",
+    "geopandas>=0.14.0",
+    "requests>=2.31.0",
+    "shapely>=2.0.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

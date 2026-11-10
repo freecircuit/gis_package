@@ -17,17 +17,19 @@ def _extract_bbox_coords(bbox):
     raise ValueError("bbox must be a tuple, list, shapely geometry, or GeoDataFrame/GeoSeries.")
 
 def download_feature_layer(url, bbox=None, in_sr=None, *, chunk_size=1000, where="1=1", source_name=None):
-    """Download features from an ArcGIS FeatureServer layer with pagination."""
+    """Download features from an ArcGIS FeatureServer layer with pagination, supporting M-values via Esri JSON."""
     features, offset, spatial_reference = [], 0, None
     coords = _extract_bbox_coords(bbox)
     
     query_url = url if url.endswith('/query') else f"{url.rstrip('/')}/query"
 
     while True:
+        # CHANGED: f='json' and returnM='true' are required because GeoJSON drops/blocks M-values.
         params = {
             'where': where,
             'outFields': '*',
-            'f': 'geojson',
+            'f': 'json',         
+            'returnM': 'true',   # CRITICAL: Forces ArcGIS to return M-values in paths
             'resultOffset': offset,
             'resultRecordCount': chunk_size
         }
@@ -50,8 +52,7 @@ def download_feature_layer(url, bbox=None, in_sr=None, *, chunk_size=1000, where
             break
         
         if not spatial_reference:
-            crs_prop = data.get("crs", {}).get("properties", {})
-            spatial_reference = crs_prop.get("name") or data.get("spatialReference", {}).get("wkid", 4326)
+            spatial_reference = data.get("spatialReference", {}).get("wkid", 4326)
 
         feats = data.get('features', [])
         if not feats:
@@ -65,16 +66,33 @@ def download_feature_layer(url, bbox=None, in_sr=None, *, chunk_size=1000, where
     if not features:
         return gpd.GeoDataFrame(columns=['geometry'])
 
-    # Optimizing Touch: Direct list unpacking structure
-    records = [
-        {"geometry": shape(f["geometry"]) if f.get("geometry") else None, 
-         **(f.get("properties", f.get("attributes", {})) or {})}
-        for f in features
-    ]
+    # PARSING ESRI JSON GEOMETRY:
+    # Esri JSON paths format: paths = [[[x, y, m], [x, y, m], ...]] or [[['x', 'y'], ...]]
+    records = []
+    for f in features:
+        geom_dict = f.get("geometry")
+        shapely_geom = None
+        
+        if geom_dict:
+            # Check for polyline paths with M or ZM values
+            if "paths" in geom_dict:
+                all_paths = geom_dict["paths"]
+                # If there's only a single path line segment, unpack it directly
+                if len(all_paths) == 1:
+                    shapely_geom = LineString(all_paths[0])
+                else:
+                    # MultiLineString case if paths contain multiple segments
+                    shapely_geom = MultiLineString(all_paths)
+            elif "rings" in geom_dict:
+                # Fallback if polygons are ever processed
+                shapely_geom = Polygon(geom_dict["rings"][0])
+                
+        attributes = f.get("attributes", {})
+        attributes["geometry"] = shapely_geom
+        records.append(attributes)
 
-    gdf = gpd.GeoDataFrame(records, geometry="geometry", crs=spatial_reference or "EPSG:4326")
+    gdf = gpd.GeoDataFrame(records, geometry="geometry", crs=spatial_reference)
     
-    # Optimizing Touch: Simplified native fallback string naming (no urlparse needed)
     if not source_name:
         url_segments = [seg for seg in url.split('/') if seg]
         gdf['source'] = url_segments[-2] if len(url_segments) >= 2 else url_segments[-1]
